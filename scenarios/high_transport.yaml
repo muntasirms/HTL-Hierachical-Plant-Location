@@ -1,0 +1,45 @@
+# ──────────────────────────────────────────────────────────────────
+# High transport cost scenario
+# ──────────────────────────────────────────────────────────────────
+# What happens when fuel/trucking costs double?
+# Expect: more, smaller plants closer to feedstock sources.
+# ──────────────────────────────────────────────────────────────────
+name: high_transport
+description: >
+  Transport cost doubled (277.6 $/MMGal/km) to simulate high fuel
+  prices or remote logistics.  All other parameters identical to
+  baseline.
+
+data:
+  feedstock_file: data/WWTPs.csv
+  feedstock_unit: MMGal/day
+  convertible_fraction: 0.01
+  lat_column: latitude
+  lon_column: longitude
+  scale_column: scale
+
+model:
+  num_candidate_plants: 50
+  initialization: top_feedstock
+
+economics:
+  transport_cost_per_unit_km: 277.6   # 2× baseline
+  tipping_fee:
+    mode: uniform_random
+    random_min: -75.0
+    random_max: -25.0
+  capital_cost_coef: -0.68
+  capital_cost_exponent: 2.0
+  revenue_coef: 1657.89
+  revenue_exponent: 1.0
+  orphan_penalty: 50.0
+
+solver:
+  num_epochs: 100000
+  learning_rate: 0.01
+  convergence_tol: 1.0e-7
+  min_epochs: 5000
+  log_interval: 500
+  scheduler_enabled: false
+
+constraints: []

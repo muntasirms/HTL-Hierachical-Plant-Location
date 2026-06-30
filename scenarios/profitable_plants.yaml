@@ -1,0 +1,53 @@
+# ──────────────────────────────────────────────────────────────────
+# Constrained scenario — require plant profitability
+# ──────────────────────────────────────────────────────────────────
+# Adds a Lagrangian constraint that every active plant must have
+# NPV ≥ 0.  This prevents the optimizer from opening plants that
+# individually lose money even if they reduce system-wide cost.
+# ──────────────────────────────────────────────────────────────────
+name: profitable_plants
+description: >
+  Same economics as baseline, but each plant must be individually
+  profitable (NPV ≥ 0).  The Lagrangian penalty ramps over 3000
+  steps from soft to hard enforcement.
+
+data:
+  feedstock_file: data/WWTPs.csv
+  feedstock_unit: MMGal/day
+  convertible_fraction: 0.01
+  lat_column: latitude
+  lon_column: longitude
+  scale_column: scale
+
+model:
+  num_candidate_plants: 50
+  initialization: top_feedstock
+
+economics:
+  transport_cost_per_unit_km: 138.8
+  tipping_fee:
+    mode: uniform_random
+    random_min: -75.0
+    random_max: -25.0
+  capital_cost_coef: -0.68
+  capital_cost_exponent: 2.0
+  revenue_coef: 1657.89
+  revenue_exponent: 1.0
+  orphan_penalty: 50.0
+
+solver:
+  num_epochs: 100000
+  learning_rate: 0.01
+  convergence_tol: 1.0e-7
+  min_epochs: 5000
+  log_interval: 500
+  scheduler_enabled: false
+
+constraints:
+  - type: plant_profitability
+    params:
+      min_npv: 0
+    lambda_init: 0.1
+    lambda_final: 100000.0
+    schedule_type: log
+    ramp_steps: 3000

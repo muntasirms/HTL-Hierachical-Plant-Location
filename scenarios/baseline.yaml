@@ -1,0 +1,53 @@
+# ──────────────────────────────────────────────────────────────────
+# Baseline scenario — minimise system-wide cost, no constraints
+# ──────────────────────────────────────────────────────────────────
+name: baseline
+description: >
+  Unconstrained baseline.  Minimise total system cost (transport +
+  capital − revenue) with no profitability, zoning, or orphaning
+  constraints.  Use this as the reference point for scenario comparisons.
+
+data:
+  feedstock_file: data/WWTPs.csv
+  feedstock_unit: MMGal/day
+  convertible_fraction: 0.01          # 1% of wastewater → convertible solids
+  lat_column: latitude
+  lon_column: longitude
+  scale_column: scale
+
+model:
+  num_candidate_plants: 50            # m candidate locations optimised
+  initialization: top_feedstock       # seed at largest WWTP sites
+
+economics:
+  # Transport: $/MMGal/km  (see docs/assumptions.md A1)
+  transport_cost_per_unit_km: 138.8
+
+  # Tipping fee paid to plant per unit feedstock
+  tipping_fee:
+    mode: uniform_random
+    random_min: -75.0
+    random_max: -25.0
+
+  # Capital cost power law  (see docs/assumptions.md A2)
+  capital_cost_coef: -0.68
+  capital_cost_exponent: 2.0
+
+  # Revenue per unit delivered  (see docs/assumptions.md A3)
+  revenue_coef: 1657.89
+  revenue_exponent: 1.0
+
+  # Penalty for un-assigned (orphaned) feedstock
+  orphan_penalty: 50.0
+
+solver:
+  num_epochs: 100000
+  learning_rate: 0.01
+  convergence_tol: 1.0e-7
+  min_epochs: 5000
+  log_interval: 500
+  scheduler_enabled: false
+  scheduler_patience: 500
+  scheduler_factor: 0.9
+
+constraints: []
