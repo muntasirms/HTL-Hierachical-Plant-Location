@@ -9,8 +9,8 @@ description: >
 
 data:
   feedstock_file: data/WWTPs.csv
-  feedstock_unit: MMGal/day
-  convertible_fraction: 0.01          # 1% of wastewater → convertible solids
+  feedstock_unit: MMGal/day           # units for the feedstock in the data. only used for bookkeeping, no unit conversions done under the hood
+  convertible_fraction: 0.01          # 1% of wastewater ->  feedstock
   lat_column: latitude
   lon_column: longitude
   scale_column: scale
@@ -20,24 +20,24 @@ model:
   initialization: top_feedstock       # seed at largest WWTP sites
 
 economics:
-  # Transport: $/MMGal/km  (see docs/assumptions.md A1)
+  # Transport: $/MMGal/km  (see docs/assumptions.md A1), matching units above
   transport_cost_per_unit_km: 138.8
 
-  # Tipping fee paid to plant per unit feedstock
+  # Tipping fee paid to plant per unit feedstock, matching units above, $/MMgal. Negative = profit for taking on the feed
   tipping_fee:
     mode: uniform_random
     random_min: -75.0
     random_max: -25.0
 
   # Capital cost power law  (see docs/assumptions.md A2)
-  capital_cost_coef: -0.68
-  capital_cost_exponent: 2.0
+  capital_cost_coef: 0.68
+  capital_cost_exponent: 0.6
 
   # Revenue per unit delivered  (see docs/assumptions.md A3)
   revenue_coef: 1657.89
   revenue_exponent: 1.0
 
-  # Penalty for un-assigned (orphaned) feedstock
+  # Penalty for un-assigned (orphaned) feedstock. Typically can match the tipping fee
   orphan_penalty: 50.0
 
 solver:

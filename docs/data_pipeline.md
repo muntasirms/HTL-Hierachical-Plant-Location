@@ -21,17 +21,19 @@ flowchart TD
     Results["📦 results.py<br>(Results Container)"]
     OutCSV["📊 outputs/*.csv<br>(CSVs)"]
     OutMap["🗺️ outputs/map.html<br>(Visualisation)"]
+    OutCO2["🌱 outputs/co2_summary.json<br>(CO₂ Breakdown)"]
 
     %% Flow
     CSV --> DataLoader
     YAML --> DataLoader
     YAML --> Solver
     DataLoader --> |"Tensors: coords, amounts, fees"| Model
-    Solver <--> |"Loss & Gradients"| Model
-    Model --> |"Final Tensors"| Results
+    Solver <--> |"Loss & Gradients<br>(cost, CO₂, or combined)"| Model
+    Model --> |"Final Tensors<br>(economic + CO₂)"| Results
     YAML --> Results
     Results --> OutCSV
     Results --> OutMap
+    Results --> OutCO2
 ```
 
 ---
@@ -77,12 +79,22 @@ Contains all parameters for the cost objective function.
 - `revenue_coef` / `revenue_exponent`: Power law parameters for revenue generation.
 - `orphan_penalty`: The flat cost per unit of feedstock left unprocessed.
 
-**4. `solver` (Optimiser Tuning)**
+**4. `emissions` (CO₂ Tracking — optional)**
+Parallel CO₂ mass-balance parameters. Disabled by default (`enabled: false`).
+- `enabled` / `mode`: Master switch and analysis mode (`post_hoc`, `co2_first`, `combined`).
+- `co2_transport_per_unit_km`: kg CO₂ per feedstock-unit per km transported.
+- `co2_orphan_per_unit`: kg CO₂ per feedstock-unit left unprocessed.
+- `co2_processing_per_unit`: kg CO₂ per feedstock-unit processed.
+- `co2_fuel_displacement_credit`: kg CO₂ avoided per feedstock-unit (negative = credit).
+- `co2_capital_per_unit` / `co2_capital_exponent`: Embodied carbon scaling (optional).
+- `co2_cost_weight`: Social cost of carbon ($/kg CO₂), used only in `combined` mode.
+
+**5. `solver` (Optimiser Tuning)**
 Controls the gradient descent behaviour (PyTorch Adam optimiser).
 - `num_epochs`, `learning_rate`, `convergence_tol`: Standard training parameters.
 - `scheduler_enabled`: Boolean to toggle learning rate reduction on plateau.
 
-**5. `constraints` (Lagrangian Penalties)**
+**6. `constraints` (Lagrangian Penalties)**
 An optional list of constraints that penalise the solver for violating real-world conditions (but don't affect true economic cost).
 - `type`: E.g., `plant_profitability`, `max_orphan_fraction`.
 - `params`: Constraint-specific variables (e.g., `min_npv: 0`).
@@ -104,6 +116,13 @@ Once the data is loaded into the PyTorch backend, it is transformed into the fol
 | `plant_coords` | `(m, 2)` | **Variable**: Lat/lon of the `m` candidate plants being optimised. |
 | `assignment_logits`| `(n, m+1)` | **Variable**: Raw routing weights. The softmax of this dictates what fraction of source `i` goes to plant `j` (or gets orphaned at index `m`). |
 | `distances` | `(n, m)` | Dynamic: Haversine distance matrix between all sources and plants. |
+| `co2_transport` | scalar | CO₂ from transport (when emissions enabled). |
+| `co2_orphan` | scalar | CO₂ from orphaned feedstock (when emissions enabled). |
+| `co2_processing` | scalar | CO₂ from HTL processing (when emissions enabled). |
+| `co2_fuel_credit` | scalar | Avoided CO₂ from fuel displacement (when emissions enabled). |
+| `co2_capital` | scalar | Embodied carbon from plant construction (when emissions enabled). |
+| `co2_total` | scalar | Net system-wide CO₂ (when emissions enabled). |
+| `plant_co2_total` | `(m,)` | Per-plant net CO₂ (when emissions enabled). |
 
 ---
 
@@ -120,6 +139,11 @@ When the optimiser converges, the internal tensors are parsed back into human-re
 - `revenue`: Calculated revenue based on load.
 - `npv`: Net Present Value (Revenue - Delivery - Capital).
 - `active`: Boolean (True if at least one source was routed here).
+- `co2_transport`: Per-plant transport CO₂ (when emissions enabled).
+- `co2_processing`: Per-plant processing CO₂ (when emissions enabled).
+- `co2_fuel_credit`: Per-plant fuel displacement credit (when emissions enabled).
+- `co2_capital`: Per-plant embodied carbon (when emissions enabled).
+- `co2_total`: Per-plant net CO₂ (when emissions enabled).
 
 **Per-Source Outputs (`assignments.csv`):**
 - `source_id`: Row index from the input CSV.
@@ -128,3 +152,11 @@ When the optimiser converges, the internal tensors are parsed back into human-re
 - `assigned_to`: Which plant ID it was predominantly assigned to.
 - `is_orphaned`: Boolean (True if the solver chose to leave this feed unassigned due to high transport costs).
 - `delivered`: The absolute amount of feed successfully routed to the assigned plant.
+- `co2_transport`: Per-source transport CO₂ to assigned plant (when emissions enabled).
+
+**CO₂ Summary (`co2_summary.json`, when emissions enabled):**
+- `emissions_mode`: Which mode was used.
+- `co2_unit`: "kg CO₂".
+- `co2_transport`, `co2_orphan`, `co2_processing`, `co2_fuel_credit`, `co2_capital`, `co2_total`: System-wide CO₂ breakdown.
+- `co2_per_unit_delivered`: CO₂ intensity metric.
+- `parameters`: Copy of the emissions config parameters used.

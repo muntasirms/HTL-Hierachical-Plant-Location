@@ -105,10 +105,65 @@
 
 ---
 
+## A9 — CO₂ Transport Intensity
+
+| Field | Value |
+|---|---|
+| **Parameter** | `emissions.co2_transport_per_unit_km` = **0.25 kg CO₂ per feedstock-unit per km** |
+| **Status** | 🔴 UNVERIFIED |
+| **Notes** | Placeholder estimate for CO₂ emitted during truck transport of wet sludge. Includes fuel combustion for heavy-duty diesel trucks. Does not account for return trips (empty haul). Real values depend on truck efficiency, load factor, and fuel type. |
+| **Action needed** | Calibrate against published lifecycle assessment (LCA) data for sludge transport. Consider whether the unit should match the `feedstock_unit` in the data config. |
+
+---
+
+## A10 — CO₂ Orphan Intensity
+
+| Field | Value |
+|---|---|
+| **Parameter** | `emissions.co2_orphan_per_unit` = **5.0 kg CO₂ per feedstock-unit** |
+| **Status** | 🔴 UNVERIFIED |
+| **Notes** | CO₂ emitted when feedstock is left unprocessed and disposed of via alternative means (e.g., landfill, incineration). Represents the emissions from not diverting waste to HTL. Higher values penalise orphaning more heavily in CO₂-optimised modes. |
+| **Action needed** | Calibrate against emissions for the alternative disposal pathway in the target region. |
+
+---
+
+## A11 — CO₂ Processing Intensity
+
+| Field | Value |
+|---|---|
+| **Parameter** | `emissions.co2_processing_per_unit` = **2.0 kg CO₂ per feedstock-unit** |
+| **Status** | 🔴 UNVERIFIED |
+| **Notes** | CO₂ emitted during HTL processing (heat, pressure, auxiliary energy). This is the gross processing emission before displacement credits. Depends on process design, energy source, and heat integration. |
+| **Action needed** | Calibrate against process-level LCA data for HTL. Consider separating direct process emissions from grid electricity emissions. |
+
+---
+
+## A12 — CO₂ Fuel Displacement Credit
+
+| Field | Value |
+|---|---|
+| **Parameter** | `emissions.co2_fuel_displacement_credit` = **−3.5 kg CO₂ per feedstock-unit** |
+| **Status** | 🔴 UNVERIFIED |
+| **Notes** | CO₂ *avoided* by producing HTL fuel that displaces fossil fuel. Negative value = net benefit. Depends on the displaced fuel type (diesel, natural gas, etc.), HTL oil yield, and energy density ratio. |
+| **Action needed** | Calibrate based on HTL oil yield fraction, product energy density, and the carbon intensity of the displaced fuel. |
+
+---
+
+## A13 — CO₂ Capital (Embodied) Intensity
+
+| Field | Value |
+|---|---|
+| **Parameter** | `emissions.co2_capital_per_unit` = **0.0 kg CO₂** (disabled by default) |
+| **Status** | 🟡 PLAUSIBLE (default off) |
+| **Notes** | Embodied carbon in plant construction materials (steel, concrete, equipment). Default is zero (disabled). When enabled, scales as `co2_capital_per_unit × Σ plant_loads^co2_capital_exponent`. |
+| **Action needed** | If embodied carbon is relevant, calibrate against construction LCA data for chemical processing plants of comparable scale. |
+
+---
+
 ## How to Add Assumptions
 
 When you introduce a new parameter or modelling choice:
 
 1. Add an entry to this file with the 🔴 status
-2. Reference the assumption ID (e.g., `[ASSUMPTION A9]`) as a comment in the relevant code
+2. Reference the assumption ID (e.g., `[ASSUMPTION A14]`) as a comment in the relevant code
 3. Update the status as validation progresses

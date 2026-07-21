@@ -8,6 +8,11 @@ All feedstock data is registered as **buffers** (not parameters) so it
 automatically follows ``.to(device)`` but is never updated by the
 optimiser.  Only ``plant_coords`` and ``assignment_logits`` carry
 gradients.
+
+CO₂ emissions are computed in parallel with economic costs using
+intensity rates from :class:`EmissionsConfig`.  When emissions are
+disabled, CO₂ keys are still present in the output dict but contain
+zeros — this keeps downstream code simple and branch-free.
 """
 
 from __future__ import annotations
@@ -35,7 +40,8 @@ class HTLPlantModel(nn.Module):
     Forward outputs
     ---------------
     A dict of tensors containing every cost component and intermediate
-    quantity needed for reporting and constraint evaluation.
+    quantity needed for reporting and constraint evaluation, plus
+    parallel CO₂ emissions when enabled.
     """
 
     def __init__(
@@ -79,13 +85,17 @@ class HTLPlantModel(nn.Module):
         self._m = m
         self._n = n
         self._eco = scenario.economics
+        self._emi = scenario.emissions
 
     # ----------------------------------------------------------------
     def forward(self) -> dict:
         """
-        Compute all cost components and intermediate quantities.
+        Compute all cost components, intermediate quantities, and
+        CO₂ emissions.
 
         Returns a dict with keys:
+
+        **Economic outputs:**
 
         - ``assignments``          (n, m+1) soft assignment weights
         - ``distances``            (n, m)   km from each source to each plant
@@ -101,8 +111,23 @@ class HTLPlantModel(nn.Module):
         - ``plant_revenues``       (m,)     per-plant revenue
         - ``plant_capital_costs``  (m,)     per-plant capital cost
         - ``plant_npvs``           (m,)     per-plant net value
+
+        **CO₂ outputs (zeros when emissions disabled):**
+
+        - ``co2_transport``        scalar   total transport CO₂
+        - ``co2_orphan``           scalar   total orphan CO₂
+        - ``co2_processing``       scalar   total processing CO₂
+        - ``co2_fuel_credit``      scalar   total fuel displacement credit
+        - ``co2_capital``          scalar   total embodied capital CO₂
+        - ``co2_total``            scalar   net system CO₂
+        - ``plant_co2_transport``  (m,)     per-plant transport CO₂
+        - ``plant_co2_processing`` (m,)     per-plant processing CO₂
+        - ``plant_co2_fuel_credit``(m,)     per-plant fuel credit
+        - ``plant_co2_capital``    (m,)     per-plant capital CO₂
+        - ``plant_co2_total``      (m,)     per-plant net CO₂
         """
         eco = self._eco
+        emi = self._emi
         m = self._m
 
         # ── soft assignments ────────────────────────────────────────
@@ -168,7 +193,76 @@ class HTLPlantModel(nn.Module):
         # ── true economic cost (NO Lagrangian penalties) ────────────
         total_cost = delivery_cost + capital_cost - revenue
 
+        # ── CO₂ emissions ───────────────────────────────────────────
+        device = self.feed_amounts.device
+        zero = torch.tensor(0.0, device=device)
+
+        if emi.enabled:
+            # Transport CO₂:  Σ aᵢⱼ · fᵢ · (rate_per_km · dᵢⱼ)
+            co2_delivery_matrix = self.feed_amounts.unsqueeze(1) * (
+                emi.co2_transport_per_unit_km * distances
+            )  # (n, m)
+            co2_orphan_matrix = (
+                self.feed_amounts * emi.co2_orphan_per_unit
+            ).unsqueeze(1)  # (n, 1)
+
+            co2_transport = torch.sum(
+                assignments[:, :m] * co2_delivery_matrix
+            )
+            co2_orphan = torch.sum(
+                assignments[:, m:] * co2_orphan_matrix
+            )
+
+            # Processing CO₂:  Σ aᵢⱼ · fᵢ · processing_rate  (j < m)
+            co2_processing = emi.co2_processing_per_unit * total_delivered
+
+            # Fuel displacement credit (negative):  rate * total_delivered
+            co2_fuel_credit = emi.co2_fuel_displacement_credit * total_delivered
+
+            # Capital (embodied) CO₂
+            co2_capital = emi.co2_capital_per_unit * torch.sum(
+                plant_loads ** emi.co2_capital_exponent
+            )
+
+            # Net system CO₂
+            co2_total = (
+                co2_transport + co2_orphan + co2_processing
+                + co2_fuel_credit + co2_capital
+            )
+
+            # ── per-plant CO₂ breakdown ─────────────────────────────
+            plant_co2_transport = torch.sum(
+                assignments[:, :m] * co2_delivery_matrix, dim=0
+            )  # (m,)
+
+            plant_co2_processing = emi.co2_processing_per_unit * per_plant_feed
+            plant_co2_fuel_credit = emi.co2_fuel_displacement_credit * per_plant_feed
+
+            plant_co2_capital = emi.co2_capital_per_unit * (
+                plant_loads ** emi.co2_capital_exponent
+            )  # (m,)
+
+            plant_co2_total = (
+                plant_co2_transport + plant_co2_processing
+                + plant_co2_fuel_credit + plant_co2_capital
+            )  # (m,)
+        else:
+            # Emissions disabled — fill with zeros
+            co2_transport = zero
+            co2_orphan = zero
+            co2_processing = zero
+            co2_fuel_credit = zero
+            co2_capital = zero
+            co2_total = zero
+
+            plant_co2_transport = torch.zeros(m, device=device)
+            plant_co2_processing = torch.zeros(m, device=device)
+            plant_co2_fuel_credit = torch.zeros(m, device=device)
+            plant_co2_capital = torch.zeros(m, device=device)
+            plant_co2_total = torch.zeros(m, device=device)
+
         return {
+            # Economic outputs
             "assignments":          assignments,
             "distances":            distances,
             "plant_loads":          plant_loads,
@@ -183,4 +277,17 @@ class HTLPlantModel(nn.Module):
             "plant_revenues":       plant_revenues,
             "plant_capital_costs":  plant_capital_costs,
             "plant_npvs":           plant_npvs,
+            # CO₂ outputs
+            "co2_transport":         co2_transport,
+            "co2_orphan":            co2_orphan,
+            "co2_processing":        co2_processing,
+            "co2_fuel_credit":       co2_fuel_credit,
+            "co2_capital":           co2_capital,
+            "co2_total":             co2_total,
+            "plant_co2_transport":   plant_co2_transport,
+            "plant_co2_processing":  plant_co2_processing,
+            "plant_co2_fuel_credit": plant_co2_fuel_credit,
+            "plant_co2_capital":     plant_co2_capital,
+            "plant_co2_total":       plant_co2_total,
         }
+

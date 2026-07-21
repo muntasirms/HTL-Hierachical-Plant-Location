@@ -1,0 +1,60 @@
+# ──────────────────────────────────────────────────────────────────
+# CO₂ Combined scenario — cost + carbon price × CO₂
+# ──────────────────────────────────────────────────────────────────
+# Optimises a blended objective:
+#     objective = economic_cost + co2_cost_weight × total_co2
+#
+# The co2_cost_weight is interpreted as a social cost of carbon
+# ($/kg CO₂).  Higher values shift the solution toward lower
+# emissions at the expense of higher economic cost.
+# ──────────────────────────────────────────────────────────────────
+name: co2_combined
+description: >
+  Combined optimisation: minimise cost + carbon price × CO₂.
+  The co2_cost_weight (0.05 $/kg CO₂) acts as a social cost of
+  carbon that penalises high-emission configurations.
+
+data:
+  feedstock_file: data/WWTPs.csv
+  feedstock_unit: MMGal/day
+  convertible_fraction: 0.01
+  lat_column: latitude
+  lon_column: longitude
+  scale_column: scale
+
+model:
+  num_candidate_plants: 50
+  initialization: top_feedstock
+
+economics:
+  transport_cost_per_unit_km: 138.8
+  tipping_fee:
+    mode: uniform_random
+    random_min: -75.0
+    random_max: -25.0
+  capital_cost_coef: 0.68
+  capital_cost_exponent: 0.6
+  revenue_coef: 1657.89
+  revenue_exponent: 1.0
+  orphan_penalty: 50.0
+
+emissions:
+  enabled: true
+  mode: combined                               # optimise cost + α × CO₂
+  co2_transport_per_unit_km: 0.25
+  co2_orphan_per_unit: 5.0
+  co2_processing_per_unit: 2.0
+  co2_fuel_displacement_credit: -3.5
+  co2_capital_per_unit: 0.0
+  co2_capital_exponent: 1.0
+  co2_cost_weight: 0.05                        # $/kg CO₂ — social cost of carbon
+
+solver:
+  num_epochs: 100000
+  learning_rate: 0.01
+  convergence_tol: 1.0e-7
+  min_epochs: 5000
+  log_interval: 500
+  scheduler_enabled: false
+
+constraints: []

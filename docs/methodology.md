@@ -183,7 +183,75 @@ The architecture supports future additions:
   (was in the original script, deferred for v1)
 - **Mass-component tracking**: track k material species through the
   network using `feed_compositions` tensors
-- **Emissions modelling**: CO₂ from transport, processing, and avoided
-  landfill — enables cost-per-tonne-CO₂e-abated metrics
+- ~~**Emissions modelling**: CO₂ from transport, processing, and avoided
+  landfill — enables cost-per-tonne-CO₂e-abated metrics~~ **→ Implemented in v0.2** (see §8)
 - **Region exclusion**: forbidden zones via smooth `region_penalty()`
   (already implemented in `geo.py`)
+
+---
+
+## 8. CO₂ Emissions Mass Balance
+
+The emissions model computes a parallel CO₂ accounting for every flow
+in the network.  Each cost component has a corresponding CO₂ intensity
+parameter.
+
+### 8.1 CO₂ Components
+
+| Component | Formula | Parameter |
+|---|---|---|
+| **Transport** | `CO₂_trans = Σᵢ Σⱼ aᵢⱼ · fᵢ · (r_co2 · dᵢⱼ)` | `co2_transport_per_unit_km` |
+| **Orphan** | `CO₂_orphan = Σᵢ aᵢ,ₘ · fᵢ · p_co2_orphan` | `co2_orphan_per_unit` |
+| **Processing** | `CO₂_proc = c_co2_proc · D` | `co2_processing_per_unit` |
+| **Fuel credit** | `CO₂_credit = c_co2_credit · D` | `co2_fuel_displacement_credit` (negative) |
+| **Capital** | `CO₂_cap = c_co2_cap · Σⱼ Lⱼ^α_co2` | `co2_capital_per_unit`, `co2_capital_exponent` |
+
+Where `D = Σᵢ Σⱼ aᵢⱼ · fᵢ` (j < m) is total delivered feedstock.
+
+### 8.2 Net System CO₂
+
+```
+CO₂_total = CO₂_trans + CO₂_orphan + CO₂_proc + CO₂_credit + CO₂_cap
+```
+
+The fuel displacement credit is typically **negative** (avoided fossil
+emissions), so `CO₂_total` may be negative if displacement outweighs
+gross emissions.
+
+### 8.3 Three Analysis Modes
+
+| Mode | Optimised Objective | CO₂ Role | Cost Role |
+|---|---|---|---|
+| **Post-hoc** | `C_true + Σ λₖ Pₖ` | Computed after solve | Optimised |
+| **CO₂-first** | `CO₂_total + Σ λₖ Pₖ` | Optimised | Computed after solve |
+| **Combined** | `C_true + α · CO₂_total + Σ λₖ Pₖ` | Co-optimised | Co-optimised |
+
+In **combined** mode, the weight α has units of $/kg CO₂ and is
+directly interpretable as a **social cost of carbon**.  Sweeping α
+from 0 → ∞ traces a cost–CO₂ Pareto front:
+
+```
+α = 0      → pure cost optimisation (equivalent to post_hoc)
+α → ∞      → pure CO₂ optimisation (equivalent to co2_first)
+0 < α < ∞  → blended Pareto-optimal solutions
+```
+
+### 8.4 Per-Plant CO₂ Metrics
+
+Like economic metrics, CO₂ is reported per-plant:
+
+```
+CO₂_trans_j   = Σᵢ aᵢⱼ · fᵢ · (r_co2 · dᵢⱼ)
+CO₂_proc_j    = c_co2_proc · Lⱼ
+CO₂_credit_j  = c_co2_credit · Lⱼ
+CO₂_cap_j     = c_co2_cap · Lⱼ^α_co2
+CO₂_total_j   = CO₂_trans_j + CO₂_proc_j + CO₂_credit_j + CO₂_cap_j
+```
+
+### 8.5 Relationship to Lagrangian Constraints
+
+All existing constraints (profitability, max orphan %, distance limits)
+continue to work in all three modes.  The constraint penalties steer the
+optimiser regardless of whether the primary objective is cost, CO₂, or
+a blend.  Constraint violations are still excluded from reported metrics.
+

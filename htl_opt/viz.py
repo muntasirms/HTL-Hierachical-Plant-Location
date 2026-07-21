@@ -32,6 +32,9 @@ def plot_convergence(
 ):
     """
     Plot true economic cost and Lagrangian penalty vs. epoch.
+
+    When CO₂ emissions tracking is enabled, a second subplot shows
+    CO₂ convergence over training.
     """
     if not results.history:
         print("  No history to plot.")
@@ -39,9 +42,14 @@ def plot_convergence(
 
     import pandas as pd
     df = pd.DataFrame(results.history)
+    has_co2 = "co2_total" in df.columns
 
-    fig, ax1 = plt.subplots(figsize=figsize)
+    nrows = 2 if has_co2 else 1
+    fig, axes = plt.subplots(nrows, 1, figsize=(figsize[0], figsize[1] * nrows),
+                             squeeze=False)
 
+    # ── Panel 1: Cost ───────────────────────────────────────────────
+    ax1 = axes[0, 0]
     color_cost = "#2563eb"
     color_pen  = "#dc2626"
 
@@ -59,6 +67,33 @@ def plot_convergence(
         ax2.tick_params(axis="y", labelcolor=color_pen)
 
     ax1.set_title(f"Convergence — {results.scenario.name}")
+
+    # ── Panel 2: CO₂ (when enabled) ─────────────────────────────────
+    if has_co2:
+        ax_co2 = axes[1, 0]
+        color_co2 = "#059669"
+        ax_co2.set_xlabel("Epoch")
+        ax_co2.set_ylabel("Total CO₂ (kg)", color=color_co2)
+        ax_co2.plot(df["epoch"], df["co2_total"], color=color_co2,
+                    linewidth=1.2, label="CO₂ total")
+        ax_co2.tick_params(axis="y", labelcolor=color_co2)
+
+        # Show component breakdown as stacked area
+        co2_cols = ["co2_transport", "co2_orphan", "co2_processing"]
+        co2_colors = ["#f59e0b", "#ef4444", "#8b5cf6"]
+        available = [c for c in co2_cols if c in df.columns]
+        if available:
+            ax_co2_r = ax_co2.twinx()
+            for col, clr in zip(available, co2_colors):
+                ax_co2_r.plot(df["epoch"], df[col], color=clr,
+                              linewidth=0.6, alpha=0.5, linestyle=":",
+                              label=col.replace("co2_", ""))
+            ax_co2_r.legend(loc="upper right", fontsize=7)
+            ax_co2_r.set_ylabel("CO₂ Components")
+
+        mode_label = results.scenario.emissions.mode.replace("_", " ").title()
+        ax_co2.set_title(f"CO₂ Convergence — mode: {mode_label}")
+
     fig.tight_layout()
 
     if save_path:
@@ -108,6 +143,7 @@ def _folium_map(results: "Results", save_path: str | None) -> object:
         plant_colors[int(row["plant_id"])] = hex_color
 
     # ── plant markers ───────────────────────────────────────────────
+    has_co2 = "co2_total" in plants_df.columns
     plant_group = folium.FeatureGroup(name="Plants", show=True)
     for _, row in active.iterrows():
         pid = int(row["plant_id"])
@@ -120,16 +156,49 @@ def _folium_map(results: "Results", save_path: str | None) -> object:
             f"Transport: ${row['delivery_cost']:,.0f}<br>"
             f"NPV: ${row['npv']:,.0f}"
         )
+        if has_co2:
+            popup_html += (
+                f"<br><hr><b>CO₂ (kg)</b><br>"
+                f"Transport: {row['co2_transport']:,.1f}<br>"
+                f"Processing: {row['co2_processing']:,.1f}<br>"
+                f"Fuel credit: {row['co2_fuel_credit']:,.1f}<br>"
+                f"Capital: {row['co2_capital']:,.1f}<br>"
+                f"<b>Total: {row['co2_total']:,.1f}</b>"
+            )
         folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=radius,
+            location=[float(row["latitude"]), float(row["longitude"])],
+            radius=float(radius),
             color=plant_colors.get(pid, "#333"),
             fill=True,
             fill_opacity=0.85,
-            popup=folium.Popup(popup_html, max_width=250),
+            popup=folium.Popup(popup_html, max_width=280),
             tooltip=f"Plant {pid}",
         ).add_to(plant_group)
     plant_group.add_to(fmap)
+
+    # ── CO₂ emissions layer ─────────────────────────────────────────
+    if has_co2:
+        co2_group = folium.FeatureGroup(name="CO₂ Emissions", show=False)
+        max_co2 = max(active["co2_total"].abs().max(), 1e-6)
+        for _, row in active.iterrows():
+            pid = int(row["plant_id"])
+            co2_val = row["co2_total"]
+            # Diverging colour: green (net negative/credit) → red (net positive)
+            if co2_val < 0:
+                co2_color = "#059669"  # green for net credit
+            else:
+                co2_color = "#dc2626"  # red for net emissions
+            co2_radius = max(3, min(25, abs(co2_val) / max_co2 * 20))
+            folium.CircleMarker(
+                location=[float(row["latitude"]), float(row["longitude"])],
+                radius=float(co2_radius),
+                color=co2_color,
+                fill=True,
+                fill_color=co2_color,
+                fill_opacity=0.6,
+                tooltip=f"Plant {pid}: {co2_val:,.1f} kg CO₂",
+            ).add_to(co2_group)
+        co2_group.add_to(fmap)
 
     # ── assignment lines ────────────────────────────────────────────
     line_group = folium.FeatureGroup(name="Assignments", show=True)
@@ -141,11 +210,11 @@ def _folium_map(results: "Results", save_path: str | None) -> object:
         color = plant_colors.get(pid, "#999")
         folium.PolyLine(
             locations=[
-                [row["latitude"], row["longitude"]],
-                [plant_coords[pid, 0], plant_coords[pid, 1]],
+                [float(row["latitude"]), float(row["longitude"])],
+                [float(plant_coords[pid, 0]), float(plant_coords[pid, 1])],
             ],
             color=color,
-            weight=max(0.5, min(4, row["delivered"] * 0.5)),
+            weight=float(max(0.5, min(4, row["delivered"] * 0.5))),
             opacity=0.45,
         ).add_to(line_group)
     line_group.add_to(fmap)
@@ -156,12 +225,12 @@ def _folium_map(results: "Results", save_path: str | None) -> object:
         pid = int(row["assigned_to"])
         status = "orphaned" if row["is_orphaned"] else f"→ Plant {pid}"
         folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=2,
+            location=[float(row["latitude"]), float(row["longitude"])],
+            radius=2.0,
             color="#888" if row["is_orphaned"] else plant_colors.get(pid, "#333"),
             fill=True,
             fill_opacity=0.5,
-            tooltip=f"Source {int(row['source_id'])}: {row['feed_amount']:.1f} ({status})",
+            tooltip=f"Source {int(row['source_id'])}: {float(row['feed_amount']):.1f} ({status})",
         ).add_to(feed_cluster)
     feed_cluster.add_to(fmap)
 
@@ -170,12 +239,12 @@ def _folium_map(results: "Results", save_path: str | None) -> object:
     orphaned = assigns_df[assigns_df["is_orphaned"]]
     for _, row in orphaned.iterrows():
         folium.CircleMarker(
-            location=[row["latitude"], row["longitude"]],
-            radius=3,
+            location=[float(row["latitude"]), float(row["longitude"])],
+            radius=3.0,
             color="#ef4444",
             fill=True,
             fill_opacity=0.7,
-            tooltip=f"ORPHANED — Source {int(row['source_id'])}: {row['feed_amount']:.1f}",
+            tooltip=f"ORPHANED — Source {int(row['source_id'])}: {float(row['feed_amount']):.1f}",
         ).add_to(orphan_group)
     orphan_group.add_to(fmap)
 

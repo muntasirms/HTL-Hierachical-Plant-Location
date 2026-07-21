@@ -3,6 +3,12 @@ Optimisation loop — the main ``solve()`` entry point.
 
 Runs Adam with optional LR scheduling, logs convergence, and returns
 a :class:`Results` object containing all outputs.
+
+Supports three CO₂ analysis modes:
+
+- **post_hoc**: optimise economic cost, compute CO₂ after the solve
+- **co2_first**: optimise CO₂ emissions, compute economic cost after
+- **combined**: optimise ``cost + α × CO₂`` (α = social cost of carbon)
 """
 
 from __future__ import annotations
@@ -56,11 +62,18 @@ def solve(
     elif isinstance(device, str):
         device = torch.device(device)
 
+    # ── emissions config ────────────────────────────────────────────
+    emi = scenario.emissions
+    emissions_active = emi.enabled
+    emissions_mode = emi.mode if emissions_active else "post_hoc"
+
     if verbose:
         print(f"╔══════════════════════════════════════════════════╗")
         print(f"║  HTL Plant Location Optimiser                   ║")
         print(f"║  Scenario: {scenario.name:<38s}║")
         print(f"║  Device:   {str(device):<38s}║")
+        if emissions_active:
+            print(f"║  CO₂ mode: {emissions_mode:<38s}║")
         print(f"╚══════════════════════════════════════════════════╝")
 
     # ── data ────────────────────────────────────────────────────────
@@ -96,8 +109,19 @@ def solve(
 
         outputs = model()
 
-        # True economic cost (what we report)
-        true_cost = outputs["total_cost"]
+        # ── select objective based on emissions mode ────────────────
+        if emissions_mode == "co2_first":
+            # Mode 2: Optimise CO₂ only
+            primary_metric = outputs["co2_total"]
+        elif emissions_mode == "combined":
+            # Mode 3: Weighted blend of cost and CO₂
+            primary_metric = (
+                outputs["total_cost"]
+                + emi.co2_cost_weight * outputs["co2_total"]
+            )
+        else:
+            # Mode 1 (default / post_hoc): Optimise cost only
+            primary_metric = outputs["total_cost"]
 
         # Lagrangian penalty (steers optimiser, NOT reported as cost)
         penalty = compute_total_penalty(
@@ -105,7 +129,7 @@ def solve(
         )
 
         # Objective the optimiser sees
-        objective = true_cost + penalty
+        objective = primary_metric + penalty
 
         objective.backward()
         optimizer.step()
@@ -118,7 +142,7 @@ def solve(
             lr = optimizer.param_groups[0]["lr"]
             log = {
                 "epoch":         epoch,
-                "true_cost":     true_cost.item(),
+                "true_cost":     outputs["total_cost"].item(),
                 "penalty":       penalty.item(),
                 "objective":     objective.item(),
                 "delivery_cost": outputs["delivery_cost"].item(),
@@ -127,14 +151,26 @@ def solve(
                 "orphan_amount": outputs["orphan_amount"].item(),
                 "lr":            lr,
             }
+            # CO₂ logging (always present, zeros when disabled)
+            if emissions_active:
+                log["co2_transport"]   = outputs["co2_transport"].item()
+                log["co2_orphan"]      = outputs["co2_orphan"].item()
+                log["co2_processing"]  = outputs["co2_processing"].item()
+                log["co2_fuel_credit"] = outputs["co2_fuel_credit"].item()
+                log["co2_capital"]     = outputs["co2_capital"].item()
+                log["co2_total"]       = outputs["co2_total"].item()
+
             history.append(log)
 
             if verbose:
+                co2_str = ""
+                if emissions_active:
+                    co2_str = f"  │  CO₂ {outputs['co2_total'].item():>12,.2f}"
                 print(
-                    f"  epoch {epoch:>7d}  │  cost {true_cost.item():>14,.2f}  │  "
+                    f"  epoch {epoch:>7d}  │  cost {outputs['total_cost'].item():>14,.2f}  │  "
                     f"penalty {penalty.item():>12,.2f}  │  "
                     f"orphan {outputs['orphan_amount'].item():>10,.2f}  │  "
-                    f"lr {lr:.2e}"
+                    f"lr {lr:.2e}{co2_str}"
                 )
 
             if callback is not None:
@@ -176,3 +212,4 @@ def solve(
         device=device,
         elapsed_seconds=elapsed,
     )
+

@@ -8,6 +8,9 @@ It provides:
 - ``.save(dir)``  — write CSVs, JSON, config, and figures to disk
 - ``.plot_map()`` — render an interactive Folium map *or* static matplotlib
 - ``.compare()``  — class method to build a scenario-comparison table
+
+When CO₂ emissions tracking is enabled, all reporting and persistence
+methods automatically include the parallel CO₂ metrics.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ class Results:
         self._feed_coords = self.model.feed_coords.detach().cpu()
         self._feed_amounts = self.model.feed_amounts.detach().cpu()
         self._plant_coords = self.model.plant_coords.detach().cpu()
+        self._emissions_active = self.scenario.emissions.enabled
 
     # ── convenience accessors ───────────────────────────────────────
     @property
@@ -102,6 +106,18 @@ class Results:
             "total_system_cost":     round(o["total_cost"].item(), 2),
         }
 
+        # CO₂ metrics (always present in outputs, report when enabled)
+        if self._emissions_active:
+            metrics.update({
+                "co2_transport":     round(o["co2_transport"].item(), 2),
+                "co2_orphan":        round(o["co2_orphan"].item(), 2),
+                "co2_processing":    round(o["co2_processing"].item(), 2),
+                "co2_fuel_credit":   round(o["co2_fuel_credit"].item(), 2),
+                "co2_capital":       round(o["co2_capital"].item(), 2),
+                "co2_total":         round(o["co2_total"].item(), 2),
+                "emissions_mode":    self.scenario.emissions.mode,
+            })
+
         # Pretty-print
         print("\n" + "=" * 56)
         print(f"  RESULTS — {self.scenario.name}")
@@ -118,7 +134,7 @@ class Results:
 
     # ── DataFrames ──────────────────────────────────────────────────
     def plants_df(self) -> pd.DataFrame:
-        """Per-plant DataFrame: location, load, costs, revenue, NPV."""
+        """Per-plant DataFrame: location, load, costs, revenue, NPV, and CO₂."""
         o = self._cpu
         m = self.scenario.model.num_candidate_plants
         coords = self.plant_coords_np
@@ -133,6 +149,15 @@ class Results:
             "revenue":       o["plant_revenues"].numpy(),
             "npv":           o["plant_npvs"].numpy(),
         })
+
+        # CO₂ columns
+        if self._emissions_active:
+            df["co2_transport"]   = o["plant_co2_transport"].numpy()
+            df["co2_processing"]  = o["plant_co2_processing"].numpy()
+            df["co2_fuel_credit"] = o["plant_co2_fuel_credit"].numpy()
+            df["co2_capital"]     = o["plant_co2_capital"].numpy()
+            df["co2_total"]       = o["plant_co2_total"].numpy()
+
         # Mark active
         hard = self.hard_assignments
         active_ids = set(hard[hard < m])
@@ -163,6 +188,19 @@ class Results:
         ])
         df["delivered"] = delivered
 
+        # Per-source transport CO₂ (to assigned plant)
+        if self._emissions_active:
+            o = self._cpu
+            distances = o["distances"].numpy()  # (n, m)
+            emi = self.scenario.emissions
+            co2_per_source = np.array([
+                feed[i] * assigns[i, hard[i]] * emi.co2_transport_per_unit_km
+                * distances[i, hard[i]] if hard[i] < m else
+                feed[i] * assigns[i, hard[i]] * emi.co2_orphan_per_unit
+                for i in range(len(feed))
+            ])
+            df["co2_transport"] = co2_per_source
+
         return df
 
     def orphaned_df(self) -> pd.DataFrame:
@@ -175,11 +213,12 @@ class Results:
         Save all results to ``output_dir/``:
 
         - ``config.yaml``        — scenario for reproducibility
-        - ``summary.json``       — key metrics
-        - ``plants.csv``         — per-plant table
+        - ``summary.json``       — key metrics (including CO₂ when enabled)
+        - ``plants.csv``         — per-plant table (including CO₂ columns)
         - ``assignments.csv``    — per-source assignments
         - ``orphaned.csv``       — orphaned sources
         - ``convergence.csv``    — training history
+        - ``co2_summary.json``   — CO₂ breakdown (when emissions enabled)
         """
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -203,6 +242,33 @@ class Results:
                 out / "convergence.csv", index=False
             )
 
+        # CO₂ summary (separate file for easy downstream consumption)
+        if self._emissions_active:
+            o = self._cpu
+            co2_data = {
+                "emissions_mode":    self.scenario.emissions.mode,
+                "co2_unit":          "kg CO₂",
+                "co2_transport":     round(o["co2_transport"].item(), 4),
+                "co2_orphan":        round(o["co2_orphan"].item(), 4),
+                "co2_processing":    round(o["co2_processing"].item(), 4),
+                "co2_fuel_credit":   round(o["co2_fuel_credit"].item(), 4),
+                "co2_capital":       round(o["co2_capital"].item(), 4),
+                "co2_total":         round(o["co2_total"].item(), 4),
+                "co2_per_unit_delivered": round(
+                    o["co2_total"].item() / max(o["total_delivered"].item(), 1e-12), 6
+                ),
+                "parameters": {
+                    "co2_transport_per_unit_km":      self.scenario.emissions.co2_transport_per_unit_km,
+                    "co2_orphan_per_unit":            self.scenario.emissions.co2_orphan_per_unit,
+                    "co2_processing_per_unit":        self.scenario.emissions.co2_processing_per_unit,
+                    "co2_fuel_displacement_credit":   self.scenario.emissions.co2_fuel_displacement_credit,
+                    "co2_capital_per_unit":           self.scenario.emissions.co2_capital_per_unit,
+                    "co2_cost_weight":               self.scenario.emissions.co2_cost_weight,
+                },
+            }
+            with open(out / "co2_summary.json", "w") as f:
+                json.dump(co2_data, f, indent=2)
+
         print(f"  📁 Results saved to {out.resolve()}")
         return out
 
@@ -223,6 +289,8 @@ class Results:
         """
         Build a side-by-side comparison table from multiple Results.
 
+        CO₂ columns are included when any scenario has emissions enabled.
+
         Usage::
 
             df = Results.compare([res_baseline, res_high_transport])
@@ -230,3 +298,4 @@ class Results:
         """
         rows = [r.summary() for r in results_list]
         return pd.DataFrame(rows).set_index("scenario")
+

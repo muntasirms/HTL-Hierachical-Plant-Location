@@ -67,6 +67,26 @@ Sources not assigned to any plant incur a flat penalty per unit, representing al
 
 Constraints (profitability, max orphan %, distance limits) are added as **Lagrangian penalties** that ramp from soft → hard during training. They steer the optimiser but are **excluded from reported costs**, so economic comparisons between scenarios are honest.
 
+### CO₂ Emissions (parallel tracking)
+
+When `emissions.enabled: true`, a parallel CO₂ mass balance runs alongside the economic calculation:
+
+| CO₂ Component | What it measures | Parameter |
+|---|---|---|
+| **Transport CO₂** | Emissions from trucking sludge | `co2_transport_per_unit_km` |
+| **Orphan CO₂** | Emissions from alternative disposal | `co2_orphan_per_unit` |
+| **Processing CO₂** | Emissions from running the HTL process | `co2_processing_per_unit` |
+| **Fuel credit** | CO₂ *avoided* by displacing fossil fuel | `co2_fuel_displacement_credit` (negative) |
+| **Capital CO₂** | Embodied carbon in plant construction | `co2_capital_per_unit` (optional) |
+
+Three analysis modes control how CO₂ interacts with the optimiser:
+
+| Mode | Objective | When to use |
+|---|---|---|
+| `post_hoc` | Optimise **cost** → report CO₂ after | "What's the carbon footprint of the cheapest layout?" |
+| `co2_first` | Optimise **CO₂** → report cost after | "What's the lowest-emission layout regardless of cost?" |
+| `combined` | Optimise **cost + α × CO₂** | "Find the Pareto-optimal tradeoff" (α = carbon price) |
+
 ---
 
 ## Per-Plant Outputs
@@ -81,6 +101,10 @@ After the solve, every plant gets its own breakdown:
 | **Revenue** | `coef × load^exponent` for plant j |
 | **NPV** | Revenue − Delivery − Capital |
 | **Active?** | Does at least one source hard-assign here? |
+| **CO₂ transport** | Transport emissions for plant j (when enabled) |
+| **CO₂ processing** | Processing emissions for plant j (when enabled) |
+| **CO₂ fuel credit** | Fuel displacement credit for plant j (when enabled) |
+| **CO₂ total** | Net CO₂ for plant j (when enabled) |
 
 ---
 
@@ -183,6 +207,49 @@ python run.py --compare outputs/baseline outputs/high_transport outputs/constrai
 
 Reads `summary.json` from each directory and prints a markdown table.
 
+### 10. Run with CO₂ tracking (post-hoc)
+
+```python
+from htl_opt import Scenario, solve
+
+s = Scenario.load("scenarios/baseline.yaml")
+s.emissions.enabled = True
+s.emissions.mode = "post_hoc"
+results = solve(s)
+results.summary()  # includes CO₂ breakdown
+```
+
+Or from the CLI:
+```bash
+python run.py scenarios/baseline.yaml --emissions-mode post_hoc
+```
+
+### 11. CO₂-optimised siting
+
+```python
+from htl_opt import Scenario, solve
+
+s = Scenario.load("scenarios/co2_minimise.yaml")
+results = solve(s)
+results.summary()  # CO₂ is minimised; cost reported post-hoc
+```
+
+### 12. Combined cost + CO₂ with carbon price sweep
+
+```python
+from htl_opt import variant, solve, Results
+
+weights = [0.0, 0.01, 0.05, 0.10, 0.50]
+results = []
+for w in weights:
+    s = variant("scenarios/co2_combined.yaml",
+                f"carbon_{w}", emissions__co2_cost_weight=w)
+    results.append(solve(s))
+
+# Pareto front: cost vs CO₂ for different carbon prices
+print(Results.compare(results).to_markdown())
+```
+
 ---
 
 ## Creating a New Scenario
@@ -224,13 +291,14 @@ solve(s).summary()
 | File | What's in it |
 |---|---|
 | `config.yaml` | Exact scenario used (copy this to reproduce) |
-| `summary.json` | System cost, active plants, orphan %, wall time |
-| `plants.csv` | Plant lat/lon, load, delivery cost, capital, revenue, NPV |
-| `assignments.csv` | Each source's assigned plant and delivered amount |
+| `summary.json` | System cost, active plants, orphan %, wall time, CO₂ (when enabled) |
+| `plants.csv` | Plant lat/lon, load, delivery cost, capital, revenue, NPV, CO₂ (when enabled) |
+| `assignments.csv` | Each source's assigned plant, delivered amount, CO₂ transport (when enabled) |
 | `orphaned.csv` | Sources with no plant assignment |
-| `convergence.csv` | Epoch-by-epoch cost and penalty history |
-| `convergence.png` | Training convergence plot |
-| `map.html` / `map.png` | Interactive or static map |
+| `convergence.csv` | Epoch-by-epoch cost, penalty, CO₂ history |
+| `convergence.png` | Training convergence plot (includes CO₂ panel when enabled) |
+| `map.html` / `map.png` | Interactive or static map (CO₂ layer when enabled) |
+| `co2_summary.json` | Detailed CO₂ breakdown by category (when emissions enabled) |
 
 ---
 
@@ -261,6 +329,17 @@ economics:
   revenue_exponent: 1.0
   orphan_penalty: 50.0
 
+emissions:                               # CO₂ tracking (optional)
+  enabled: false                         # set true to activate
+  mode: post_hoc                         # "post_hoc" | "co2_first" | "combined"
+  co2_transport_per_unit_km: 0.25        # kg CO₂ / feedstock-unit / km
+  co2_orphan_per_unit: 5.0               # kg CO₂ / feedstock-unit orphaned
+  co2_processing_per_unit: 2.0           # kg CO₂ / feedstock-unit processed
+  co2_fuel_displacement_credit: -3.5     # kg CO₂ avoided (negative = credit)
+  co2_capital_per_unit: 0.0              # embodied carbon (optional)
+  co2_capital_exponent: 1.0
+  co2_cost_weight: 0.05                  # $/kg CO₂ (combined mode only)
+
 solver:
   num_epochs: 100000
   learning_rate: 0.01
@@ -287,3 +366,5 @@ All economic parameters are flagged for verification in [assumptions.md](assumpt
 1. **A2 — Capital cost sign** is negative (unusual — needs confirmation)
 2. **A3 — Revenue coefficient** factors are undocumented
 3. **A1 — Transport rate** source needs verification against cited paper
+
+CO₂ intensity parameters (A9–A13) are placeholders — see [assumptions.md](assumptions.md) for details.

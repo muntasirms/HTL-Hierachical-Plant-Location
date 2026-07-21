@@ -19,6 +19,16 @@ Typical usage in a user script::
                      plant_profitability={"min_npv": 0},
                      max_orphan_fraction={"fraction": 0.05})
     results = solve(s)
+
+    # CO₂ carbon price sweep (Pareto front)
+    results = sweep("scenarios/co2_combined.yaml",
+                     "emissions.co2_cost_weight",
+                     [0.0, 0.01, 0.05, 0.10, 0.50, 1.0])
+
+    # CO₂ transport intensity sweep
+    results = sweep("scenarios/co2_post_hoc.yaml",
+                     "emissions.co2_transport_per_unit_km",
+                     [0.1, 0.25, 0.5, 1.0])
 """
 
 from __future__ import annotations

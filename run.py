@@ -12,6 +12,12 @@ Usage
     # Force CPU:
     python run.py scenarios/baseline.yaml --device cpu
 
+    # Enable CO₂ tracking (overrides YAML):
+    python run.py scenarios/baseline.yaml --emissions-mode post_hoc
+
+    # Combined mode with custom carbon price:
+    python run.py scenarios/baseline.yaml --emissions-mode combined --co2-weight 0.10
+
     # Compare two saved runs:
     python run.py --compare outputs/baseline outputs/high_transport
 """
@@ -59,6 +65,18 @@ def main():
         help="Use matplotlib static map instead of Folium.",
     )
     parser.add_argument(
+        "--emissions-mode",
+        choices=["post_hoc", "co2_first", "combined"],
+        default=None,
+        help="Enable CO₂ tracking with the specified mode (overrides YAML).",
+    )
+    parser.add_argument(
+        "--co2-weight",
+        type=float,
+        default=None,
+        help="Carbon price $/kg CO₂ for combined mode (overrides YAML).",
+    )
+    parser.add_argument(
         "--compare",
         nargs="+",
         metavar="DIR",
@@ -95,6 +113,14 @@ def main():
     scenario = Scenario.load(scenario_path)
     base_dir = scenario_path.resolve().parent.parent  # repo root
 
+    # ── CLI overrides for emissions ─────────────────────────────────
+    if args.emissions_mode is not None:
+        scenario.emissions.enabled = True
+        scenario.emissions.mode = args.emissions_mode
+    if args.co2_weight is not None:
+        scenario.emissions.enabled = True
+        scenario.emissions.co2_cost_weight = args.co2_weight
+
     results = solve(
         scenario,
         device=args.device,
@@ -122,3 +148,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

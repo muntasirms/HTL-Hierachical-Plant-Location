@@ -105,6 +105,48 @@ class ConstraintConfig:
     ramp_steps: int = 3_000
 
 
+# ── emissions ───────────────────────────────────────────────────────
+@dataclass
+class EmissionsConfig:
+    """
+    CO₂ emissions intensity parameters for all flow types.
+
+    Three analysis modes are supported:
+
+    - ``"post_hoc"``  — optimise cost, compute CO₂ after the solve
+    - ``"co2_first"`` — optimise CO₂, compute cost after the solve
+    - ``"combined"``  — optimise ``cost + co2_cost_weight × CO₂``
+
+    All intensity parameters use **kg CO₂ per feedstock-unit** (or per
+    feedstock-unit-km for transport).  Set ``enabled = True`` to
+    activate emissions tracking.
+    """
+    enabled: bool = False                          # master switch
+    mode: str = "post_hoc"                         # "post_hoc" | "co2_first" | "combined"
+
+    # Transport emissions  (kg CO₂ per feedstock-unit per km)        [ASSUMPTION A9]
+    co2_transport_per_unit_km: float = 0.25
+
+    # Orphan emissions  (kg CO₂ per feedstock-unit left unprocessed) [ASSUMPTION A10]
+    co2_orphan_per_unit: float = 5.0
+
+    # Processing / fuel-production emissions                          [ASSUMPTION A11]
+    # (kg CO₂ per feedstock-unit processed)
+    co2_processing_per_unit: float = 2.0
+
+    # Fuel displacement credit  (negative = credit)                   [ASSUMPTION A12]
+    # (kg CO₂ avoided per feedstock-unit converted to fuel)
+    co2_fuel_displacement_credit: float = -3.5
+
+    # Capital (embodied) emissions                                    [ASSUMPTION A13]
+    # (kg CO₂ per plant-load-unit^exponent)
+    co2_capital_per_unit: float = 0.0              # optional, default off
+    co2_capital_exponent: float = 1.0
+
+    # Combined-mode blending weight  ($/kg CO₂ — social cost of carbon)
+    co2_cost_weight: float = 0.05                  # only used when mode == "combined"
+
+
 # ── top-level scenario ──────────────────────────────────────────────
 @dataclass
 class Scenario:
@@ -119,6 +161,11 @@ class Scenario:
 
         scenario.economics.orphan_penalty = 100
 
+    Enable CO₂ tracking::
+
+        scenario.emissions.enabled = True
+        scenario.emissions.mode = "combined"
+
     Save for reproducibility::
 
         scenario.save("outputs/my_run/config.yaml")
@@ -129,6 +176,7 @@ class Scenario:
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     economics: EconomicsConfig = field(default_factory=EconomicsConfig)
+    emissions: EmissionsConfig = field(default_factory=EmissionsConfig)
     solver: SolverConfig = field(default_factory=SolverConfig)
     constraints: List[ConstraintConfig] = field(default_factory=list)
 
@@ -170,6 +218,9 @@ class Scenario:
         tipping = TippingFeeConfig(**tf_raw) if tf_raw else TippingFeeConfig()
         eco = EconomicsConfig(tipping_fee=tipping, **eco_raw)
 
+        # Emissions config
+        emissions = EmissionsConfig(**d.get("emissions", {}))
+
         model = ModelConfig(**d.get("model", {}))
         solver = SolverConfig(**d.get("solver", {}))
         constraints = [ConstraintConfig(**c) for c in d.get("constraints", [])]
@@ -180,6 +231,7 @@ class Scenario:
             data=data,
             model=model,
             economics=eco,
+            emissions=emissions,
             solver=solver,
             constraints=constraints,
         )

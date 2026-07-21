@@ -42,6 +42,24 @@ results.save("outputs/my_run")
 results.plot_map()
 ```
 
+### CO₂ Emissions Tracking
+
+```python
+from htl_opt import Scenario, solve
+
+scenario = Scenario.load("scenarios/baseline.yaml")
+scenario.emissions.enabled = True
+scenario.emissions.mode = "combined"  # "post_hoc" | "co2_first" | "combined"
+results = solve(scenario)
+results.summary()  # includes CO₂ breakdown
+```
+
+Or from the CLI:
+```bash
+python run.py scenarios/baseline.yaml --emissions-mode post_hoc
+python run.py scenarios/co2_combined.yaml --co2-weight 0.10
+```
+
 ---
 
 ## Repository Structure
@@ -52,28 +70,32 @@ results.plot_map()
 │   ├── data.py               #   CSV loading and preprocessing
 │   ├── geo.py                #   Haversine distance, region penalties
 │   ├── constraints.py        #   Lagrangian penalty system
-│   ├── model.py              #   PyTorch model (plant_coords + assignments)
-│   ├── solver.py             #   Optimisation loop (Adam + convergence)
+│   ├── model.py              #   PyTorch model (plant_coords + assignments + CO₂)
+│   ├── solver.py             #   Optimisation loop (3 CO₂ modes)
 │   ├── results.py            #   Results container, DataFrames, save/load
-│   └── viz.py                #   Maps (Folium/matplotlib) + convergence plots
+│   └── viz.py                #   Maps (Folium/matplotlib) + convergence + CO₂ overlay
 │
 ├── scenarios/                # YAML scenario configs
 │   ├── baseline.yaml         #   Unconstrained cost minimisation
 │   ├── high_transport.yaml   #   2× transport cost
-│   └── profitable_plants.yaml#   Per-plant profitability constraint
+│   ├── profitable_plants.yaml#   Per-plant profitability constraint
+│   ├── co2_post_hoc.yaml     #   Cost-optimised, CO₂ reported post-hoc
+│   ├── co2_minimise.yaml     #   CO₂-optimised, cost reported post-hoc
+│   └── co2_combined.yaml     #   Combined cost + carbon price × CO₂
 │
 ├── examples/                 # Example scripts
 │   ├── quickstart.py         #   Minimal 30-line workflow
-│   └── compare_scenarios.py  #   Run & compare multiple scenarios
+│   ├── compare_scenarios.py  #   Run & compare multiple scenarios
+│   └── co2_analysis.py       #   All 3 CO₂ modes + Pareto sweep
 │
 ├── data/                     # ← Put WWTPs.csv here
 ├── outputs/                  # ← Generated results go here
 │
 ├── docs/
-│   ├── methodology.md        #   Mathematical formulation
+│   ├── methodology.md        #   Mathematical formulation (incl. CO₂ §8)
 │   ├── guide.md              #   Quick reference guide & usage examples
 │   ├── data_pipeline.md      #   Data flow, variables, and CSV requirements
-│   └── assumptions.md        #   Parameter assumption register (flagged for review)
+│   └── assumptions.md        #   Parameter assumption register (A1–A13)
 │
 ├── run.py                    # CLI entry point
 ├── requirements.txt
@@ -107,6 +129,7 @@ Every run is defined by a YAML file. Key sections:
 | `data` | CSV path, column names, conversion fraction |
 | `model` | Number of candidate plants, initialisation strategy |
 | `economics` | Transport rate, capital cost, revenue, orphan penalty, tipping fees |
+| `emissions` | CO₂ tracking: mode, intensity rates, carbon price (optional) |
 | `solver` | Epochs, learning rate, convergence tolerance, LR scheduler |
 | `constraints` | List of Lagrangian constraints (type + params + schedule) |
 
@@ -141,13 +164,14 @@ Each run saves to `outputs/<scenario_name>/`:
 | File | Contents |
 |---|---|
 | `config.yaml` | Exact config used (for reproducibility) |
-| `summary.json` | Key metrics (costs, plant count, orphan %) |
-| `plants.csv` | Per-plant: location, load, costs, revenue, NPV |
-| `assignments.csv` | Per-source: assigned plant, delivered amount |
+| `summary.json` | Key metrics (costs, plant count, orphan %, CO₂ when enabled) |
+| `plants.csv` | Per-plant: location, load, costs, revenue, NPV, CO₂ |
+| `assignments.csv` | Per-source: assigned plant, delivered amount, CO₂ transport |
 | `orphaned.csv` | Sources with no plant assignment |
-| `convergence.csv` | Cost vs. epoch training history |
-| `convergence.png` | Convergence plot |
-| `map.html` | Interactive Folium map (or `map.png` for static) |
+| `convergence.csv` | Cost vs. epoch training history (+ CO₂ when enabled) |
+| `convergence.png` | Convergence plot (+ CO₂ panel when enabled) |
+| `map.html` | Interactive Folium map (+ CO₂ layer when enabled) |
+| `co2_summary.json` | Detailed CO₂ breakdown (when emissions enabled) |
 
 ### Scenario Comparison
 
@@ -189,6 +213,9 @@ Lagrangian multipliers ramp from small to large over training. This lets the opt
 ```bash
 # SLURM example
 srun python run.py scenarios/baseline.yaml --device cuda --static-map --output outputs/baseline_gpu
+
+# With CO₂ tracking on HPC
+srun python run.py scenarios/co2_combined.yaml --device cuda --static-map --co2-weight 0.10
 ```
 
 Use `--static-map` on headless nodes (avoids Folium's JavaScript dependency). Use `--device cpu` to force CPU if needed.
@@ -199,7 +226,7 @@ Use `--static-map` on headless nodes (avoids Folium's JavaScript dependency). Us
 
 - [ ] Multi-hierarchy plant networks (collection depots → processing plants)
 - [ ] Mass-component tracking (k species through the network)
-- [ ] CO₂ emissions modelling and cost-per-tonne-CO₂e-abated
+- [x] ~~CO₂ emissions modelling and cost-per-tonne-CO₂e-abated~~ **(v0.2)**
 - [ ] Zoning / forbidden region constraints
 - [ ] Market saturation (diminishing revenue)
 - [ ] Sensitivity analysis automation
